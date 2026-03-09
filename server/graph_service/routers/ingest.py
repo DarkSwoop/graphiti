@@ -72,6 +72,7 @@ async def add_messages(
             reference_time=m.timestamp,
             source=EpisodeType.message,
             source_description=m.source_description,
+            saga=request.saga,
         )
 
     for m in request.messages:

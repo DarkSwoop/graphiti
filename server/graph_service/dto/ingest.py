@@ -6,6 +6,7 @@ from graph_service.dto.common import Message
 class AddMessagesRequest(BaseModel):
     group_id: str = Field(..., description='The group id of the messages to add')
     messages: list[Message] = Field(..., description='The messages to add')
+    saga: str | None = Field(default=None, description='Optional saga name to group episodes')
 
 
 class AddEntityNodeRequest(BaseModel):
