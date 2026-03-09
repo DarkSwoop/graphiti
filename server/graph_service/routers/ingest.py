@@ -18,9 +18,15 @@ class AsyncWorker:
     async def worker(self):
         while True:
             try:
-                print(f'Got a job: (size of remaining queue: {self.queue.qsize()})')
                 job = await self.queue.get()
-                await job()
+                print(f'Processing job (remaining in queue: {self.queue.qsize()})')
+                try:
+                    await job()
+                    print('Job completed successfully')
+                except Exception as e:
+                    import traceback
+                    print(f'Worker job failed: {e}')
+                    traceback.print_exc()
             except asyncio.CancelledError:
                 break
 
@@ -40,9 +46,14 @@ async_worker = AsyncWorker()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    from graph_service.zep_graphiti import create_configured_graphiti
+    async_worker.graphiti = await create_configured_graphiti()
+    print('Worker graphiti client initialized (app-scoped)')
     await async_worker.start()
     yield
     await async_worker.stop()
+    if hasattr(async_worker, 'graphiti') and async_worker.graphiti:
+        await async_worker.graphiti.close()
 
 
 router = APIRouter(lifespan=lifespan)
@@ -54,8 +65,7 @@ async def add_messages(
     graphiti: ZepGraphitiDep,
 ):
     async def add_messages_task(m: Message):
-        await graphiti.add_episode(
-            uuid=m.uuid,
+        await async_worker.graphiti.add_episode(
             group_id=request.group_id,
             name=m.name,
             episode_body=f'{m.role or ""}({m.role_type}): {m.content}',
