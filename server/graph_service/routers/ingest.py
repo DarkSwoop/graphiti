@@ -73,6 +73,7 @@ async def add_messages(
             source=EpisodeType.message,
             source_description=m.source_description,
             saga=request.saga,
+            custom_extraction_instructions=request.custom_extraction_instructions,
         )
 
     for m in request.messages:
