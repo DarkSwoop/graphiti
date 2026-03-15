@@ -2,14 +2,34 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, status
 
+from graphiti_core.search.search_config import (
+    CommunityReranker,
+    CommunitySearchConfig,
+    CommunitySearchMethod,
+    EdgeReranker,
+    EdgeSearchConfig,
+    EdgeSearchMethod,
+    NodeReranker,
+    NodeSearchConfig,
+    NodeSearchMethod,
+    SearchConfig,
+)
+from graphiti_core.search.search_filters import (
+    ComparisonOperator,
+    DateFilter,
+    SearchFilters,
+)
+
 from graph_service.dto import (
+    AdvancedSearchQuery,
     GetMemoryRequest,
     GetMemoryResponse,
     Message,
     SearchQuery,
     SearchResults,
 )
-from graph_service.zep_graphiti import ZepGraphitiDep, get_fact_result_from_edge
+from graph_service.dto.retrieve import AdvancedSearchResults
+from graph_service.zep_graphiti import ZepGraphitiDep, build_advanced_results, get_fact_result_from_edge
 
 router = APIRouter()
 
@@ -25,6 +45,47 @@ async def search(query: SearchQuery, graphiti: ZepGraphitiDep):
     return SearchResults(
         facts=facts,
     )
+
+
+@router.post('/search-advanced', status_code=status.HTTP_200_OK)
+async def search_advanced(
+    query: AdvancedSearchQuery, graphiti: ZepGraphitiDep
+) -> AdvancedSearchResults:
+    search_filter = SearchFilters()
+    if query.exclude_expired:
+        search_filter = SearchFilters(
+            expired_at=[[DateFilter(comparison_operator=ComparisonOperator.is_null)]]
+        )
+
+    config = SearchConfig(
+        edge_config=EdgeSearchConfig(
+            search_methods=[EdgeSearchMethod.bm25, EdgeSearchMethod.cosine_similarity],
+            reranker=EdgeReranker.mmr,
+            mmr_lambda=0.7,
+        ),
+        node_config=NodeSearchConfig(
+            search_methods=[NodeSearchMethod.bm25, NodeSearchMethod.cosine_similarity],
+            reranker=NodeReranker.mmr,
+            mmr_lambda=0.7,
+        ),
+        community_config=CommunitySearchConfig(
+            search_methods=[CommunitySearchMethod.bm25, CommunitySearchMethod.cosine_similarity],
+            reranker=CommunityReranker.mmr,
+            mmr_lambda=0.7,
+        ),
+        limit=query.max_results,
+    )
+
+    search_results = await graphiti.search_(
+        query=query.query,
+        config=config,
+        group_ids=query.group_ids,
+        search_filter=search_filter,
+    )
+
+    await graphiti.resolve_missing_node_names(search_results)
+
+    return build_advanced_results(search_results)
 
 
 @router.get('/entity-edge/{uuid}', status_code=status.HTTP_200_OK)

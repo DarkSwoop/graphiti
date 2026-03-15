@@ -14,8 +14,16 @@ from graphiti_core.llm_client.errors import RateLimitError
 from graphiti_core.nodes import EntityNode, EpisodicNode  # type: ignore
 from pydantic import BaseModel
 
+from graphiti_core.search.search_config import SearchResults as GraphitiSearchResults
+
 from graph_service.config import ZepEnvDep
-from graph_service.dto import FactResult
+from graph_service.dto import (
+    AdvancedSearchResults,
+    CommunityResult,
+    EnrichedFactResult,
+    EntityResult,
+    FactResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +158,28 @@ class ZepGraphiti(Graphiti):
         except NodeNotFoundError as e:
             raise HTTPException(status_code=404, detail=e.message) from e
 
+    async def resolve_missing_node_names(
+        self,
+        search_results: GraphitiSearchResults,
+    ) -> None:
+        """Mutate search_results.nodes to include nodes referenced by edges but not in results."""
+        known_uuids = {node.uuid for node in search_results.nodes}
+        missing_uuids = set()
+        for edge in search_results.edges:
+            if edge.source_node_uuid not in known_uuids:
+                missing_uuids.add(edge.source_node_uuid)
+            if edge.target_node_uuid not in known_uuids:
+                missing_uuids.add(edge.target_node_uuid)
+
+        if missing_uuids:
+            try:
+                extra_nodes = await EntityNode.get_by_uuids(
+                    self.driver, list(missing_uuids)
+                )
+                search_results.nodes.extend(extra_nodes)
+            except Exception as e:
+                logger.warning(f"Failed to resolve {len(missing_uuids)} missing nodes: {e}")
+
 
 def _configure_client(client: ZepGraphiti, settings) -> None:
     """Apply LLM + embedder config from settings to a ZepGraphiti client."""
@@ -232,6 +262,62 @@ def get_fact_result_from_edge(edge: EntityEdge):
         invalid_at=edge.invalid_at,
         created_at=edge.created_at,
         expired_at=edge.expired_at,
+    )
+
+
+def build_advanced_results(
+    search_results: GraphitiSearchResults,
+) -> AdvancedSearchResults:
+    """Convert Graphiti SearchResults into our AdvancedSearchResults DTO."""
+    node_name_map: dict[str, str] = {
+        node.uuid: node.name for node in search_results.nodes
+    }
+
+    facts: list[EnrichedFactResult] = []
+    for i, edge in enumerate(search_results.edges):
+        score = (
+            search_results.edge_reranker_scores[i]
+            if i < len(search_results.edge_reranker_scores)
+            else 0.0
+        )
+        facts.append(
+            EnrichedFactResult(
+                uuid=edge.uuid,
+                name=edge.name,
+                fact=edge.fact,
+                source_entity=node_name_map.get(edge.source_node_uuid, "unknown"),
+                target_entity=node_name_map.get(edge.target_node_uuid, "unknown"),
+                valid_at=edge.valid_at,
+                invalid_at=edge.invalid_at,
+                created_at=edge.created_at,
+                expired_at=edge.expired_at,
+                score=score,
+            )
+        )
+
+    entities: list[EntityResult] = [
+        EntityResult(
+            uuid=node.uuid,
+            name=node.name,
+            summary=node.summary or "",
+            labels=[l for l in node.labels if l != "Entity"],
+        )
+        for node in search_results.nodes
+    ]
+
+    communities: list[CommunityResult] = [
+        CommunityResult(
+            uuid=c.uuid,
+            name=c.name,
+            summary=c.summary or "",
+        )
+        for c in search_results.communities
+    ]
+
+    return AdvancedSearchResults(
+        facts=facts,
+        entities=entities,
+        communities=communities,
     )
 
 

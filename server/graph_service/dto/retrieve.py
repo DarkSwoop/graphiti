@@ -30,6 +30,50 @@ class SearchResults(BaseModel):
     facts: list[FactResult]
 
 
+class EnrichedFactResult(BaseModel):
+    uuid: str
+    name: str
+    fact: str
+    source_entity: str
+    target_entity: str
+    valid_at: datetime | None
+    invalid_at: datetime | None
+    created_at: datetime
+    expired_at: datetime | None
+    score: float
+
+    class Config:
+        json_encoders = {datetime: lambda v: v.astimezone(timezone.utc).isoformat()}
+
+
+class EntityResult(BaseModel):
+    uuid: str
+    name: str
+    summary: str
+    labels: list[str]
+
+
+class CommunityResult(BaseModel):
+    uuid: str
+    name: str
+    summary: str
+
+
+class AdvancedSearchQuery(BaseModel):
+    query: str
+    group_ids: list[str] | None = Field(
+        None, description='The group ids for the memories to search'
+    )
+    max_results: int = Field(default=10, description='The maximum number of results to retrieve')
+    exclude_expired: bool = Field(default=True, description='Exclude expired/invalidated facts')
+
+
+class AdvancedSearchResults(BaseModel):
+    facts: list[EnrichedFactResult]
+    entities: list[EntityResult]
+    communities: list[CommunityResult]
+
+
 class GetMemoryRequest(BaseModel):
     group_id: str = Field(..., description='The group id of the memory to get')
     max_facts: int = Field(default=10, description='The maximum number of facts to retrieve')
