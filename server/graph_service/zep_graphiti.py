@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 import types
 from typing import Annotated
 
@@ -72,17 +73,45 @@ async def _generate_response_lmstudio(
 
         response = await self.client.chat.completions.create(**request_kwargs)
 
-        result = response.choices[0].message.content or '{}'
+        message = response.choices[0].message
+        # Some reasoning models (e.g. Qwen 3.5) put structured output in
+        # reasoning_content instead of content when thinking is enabled.
+        result = message.content or ''
+        if not result.strip():
+            reasoning = getattr(message, 'reasoning_content', None) or ''
+            if reasoning.strip():
+                result = reasoning
+        result = result or '{}'
         input_tokens = 0
         output_tokens = 0
         if hasattr(response, 'usage') and response.usage:
             input_tokens = getattr(response.usage, 'prompt_tokens', 0) or 0
             output_tokens = getattr(response.usage, 'completion_tokens', 0) or 0
 
+        # Strip <think>...</think> tags that some models emit before JSON
+        result = re.sub(r'<think>[\s\S]*?</think>', '', result).strip()
+        # Also handle unclosed <think> tags
+        result = re.sub(r'<think>[\s\S]*$', '', result).strip()
+        if not result:
+            result = '{}'
+
         result_dict = json.loads(result)
 
-        # Validate against Pydantic model (raises ValidationError → triggers retry)
+        # Validate against Pydantic model; if empty response, fill defaults
         if response_model:
+            if result_dict == {} or result_dict is None:
+                # Try to construct with empty lists/defaults for required fields
+                try:
+                    defaults = {}
+                    for field_name, field_info in response_model.model_fields.items():
+                        if field_info.annotation and hasattr(field_info.annotation, '__origin__'):
+                            if field_info.annotation.__origin__ is list:
+                                defaults[field_name] = []
+                    if defaults:
+                        logger.warning(f'LLM returned empty object for {response_model.__name__}, using defaults: {defaults}')
+                        result_dict = defaults
+                except Exception:
+                    pass
             response_model.model_validate(result_dict)
 
         return result_dict, input_tokens, output_tokens
